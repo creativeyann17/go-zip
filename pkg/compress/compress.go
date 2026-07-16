@@ -6,14 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
-	"runtime/debug"
 	"sort"
 	"sync"
 	"sync/atomic"
 
 	"github.com/creativeyann17/go-zip/internal/multipart"
-	"github.com/klauspost/compress/flate"
 )
 
 // progressReportStep is the minimum bytes between EventFileProgress emissions.
@@ -54,9 +51,8 @@ func Compress(opts *Options, progressCb ProgressCallback) (*Result, error) {
 
 func compressToZip(opts *Options, progressCb ProgressCallback, foldersToCompress []folderTask, totalFiles int, result *Result) error {
 	if opts.DisableGC {
-		runtime.GC()
-		oldGCPercent := debug.SetGCPercent(-1)
-		defer debug.SetGCPercent(oldGCPercent)
+		restoreGC := enableLowLatencyGC(opts.Quiet)
+		defer restoreGC()
 	}
 
 	baseOutputPath := multipart.NormalizeBase(opts.OutputPath)
@@ -94,6 +90,13 @@ func compressToZip(opts *Options, progressCb ProgressCallback, foldersToCompress
 			var workerZipFile *os.File
 			var workerZipPath string
 
+			// Worker-local freelist: one live flate.Writer reused for every file
+			// this worker compresses. Bounds flate memory to O(threads), not
+			// O(files) — without it, each file's NewWriter stays live on the heap
+			// for the whole job under --no-gc.
+			flatePool := newFlateFreelist(flateLevelFromOptions(opts.Level), 1)
+			defer flatePool.drain()
+
 			ensureArchive := func() error {
 				if workerZipFile != nil {
 					return nil
@@ -118,16 +121,8 @@ func compressToZip(opts *Options, progressCb ProgressCallback, foldersToCompress
 				}
 
 				workerZipWriter = zip.NewWriter(workerZipFile)
-				workerZipWriter.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
-					if opts.Level <= 1 {
-						return flate.NewWriter(out, flate.NoCompression)
-					}
-					flateLevel := opts.Level - 1
-					if flateLevel > flate.BestCompression {
-						flateLevel = flate.BestCompression
-					}
-					return flate.NewWriter(out, flateLevel)
-				})
+				// Reuse flate.Writer via freelist+Reset (klauspost official pattern).
+				workerZipWriter.RegisterCompressor(zip.Deflate, flatePool.wrap)
 
 				zipFilesMu.Lock()
 				zipFiles[workerID].path = workerZipPath
@@ -164,65 +159,24 @@ func compressToZip(opts *Options, progressCb ProgressCallback, foldersToCompress
 					continue
 				}
 
+				var copyErr error
 				if !opts.DryRun && workerZipWriter != nil {
-					header := &zip.FileHeader{
-						Name:   task.RelPath,
-						Method: zip.Deflate,
-					}
-					if opts.Level == 1 {
-						header.Method = zip.Store
-					}
-
-					w, err := workerZipWriter.CreateHeader(header)
-					if err != nil {
-						_ = file.Close()
-						errorsMu.Lock()
-						result.Errors = append(result.Errors, fmt.Errorf("%s: create header: %w", task.RelPath, err))
-						errorsMu.Unlock()
-						continue
-					}
-
-					buf := getReadBuffer()
-					var written, lastReported int64
-					for {
-						nr, errRead := file.Read(buf)
-						if nr > 0 {
-							nw, errWrite := w.Write(buf[0:nr])
-							if errWrite != nil {
-								_ = file.Close()
-								errorsMu.Lock()
-								result.Errors = append(result.Errors, fmt.Errorf("%s: write: %w", task.RelPath, errWrite))
-								errorsMu.Unlock()
-								break
-							}
-							written += int64(nw)
-							if progressCb != nil && written-lastReported >= progressReportStep {
-								lastReported = written
-								progressCb(ProgressEvent{
-									Type:     EventFileProgress,
-									FilePath: task.RelPath,
-									Current:  written,
-									Total:    int64(task.OrigSize),
-								})
-							}
-						}
-						if errRead == io.EOF {
-							break
-						}
-						if errRead != nil {
-							_ = file.Close()
-							errorsMu.Lock()
-							result.Errors = append(result.Errors, fmt.Errorf("%s: read: %w", task.RelPath, errRead))
-							errorsMu.Unlock()
-							break
-						}
-					}
-					putReadBuffer(buf)
+					copyErr = writeZipEntry(workerZipWriter, file, task, opts, progressCb)
 				} else if opts.DryRun {
 					totalCompSize.Add(task.OrigSize / 2)
 				}
-
 				_ = file.Close()
+
+				if copyErr != nil {
+					errorsMu.Lock()
+					result.Errors = append(result.Errors, copyErr)
+					errorsMu.Unlock()
+					if progressCb != nil {
+						progressCb(ProgressEvent{Type: EventError, FilePath: task.RelPath})
+					}
+					continue
+				}
+
 				processedCount.Add(1)
 				if progressCb != nil {
 					progressCb(ProgressEvent{
@@ -235,22 +189,28 @@ func compressToZip(opts *Options, progressCb ProgressCallback, foldersToCompress
 			}
 
 			if !opts.DryRun && workerZipFile != nil {
-				if err := workerZipWriter.Close(); err != nil {
+				// Close the writer (flushes the central directory) and the
+				// underlying file unconditionally, even if the writer close
+				// fails — otherwise a mid-stream error leaks the *os.File for
+				// the rest of the job (worse under --no-gc, where nothing
+				// reclaims it until the deferred restore runs).
+				writerErr := workerZipWriter.Close()
+				if writerErr != nil {
 					errorsMu.Lock()
-					result.Errors = append(result.Errors, fmt.Errorf("worker %d: close zip: %w", workerID, err))
+					result.Errors = append(result.Errors, fmt.Errorf("worker %d: close zip: %w", workerID, writerErr))
 					errorsMu.Unlock()
-					return
 				}
 				if err := workerZipFile.Close(); err != nil {
 					errorsMu.Lock()
 					result.Errors = append(result.Errors, fmt.Errorf("worker %d: close file: %w", workerID, err))
 					errorsMu.Unlock()
-					return
 				}
-				if stat, err := os.Stat(workerZipPath); err == nil {
-					zipFilesMu.Lock()
-					zipFiles[workerID].size = uint64(stat.Size())
-					zipFilesMu.Unlock()
+				if writerErr == nil {
+					if stat, err := os.Stat(workerZipPath); err == nil {
+						zipFilesMu.Lock()
+						zipFiles[workerID].size = uint64(stat.Size())
+						zipFilesMu.Unlock()
+					}
 				}
 			}
 		}(i)
@@ -307,4 +267,51 @@ func compressToZip(opts *Options, progressCb ProgressCallback, foldersToCompress
 		return fmt.Errorf("completed with %d errors (see result.Errors)", len(result.Errors))
 	}
 	return nil
+}
+
+// writeZipEntry compresses one open file into the zip writer. On error, no
+// partial entry should be counted as processed by the caller.
+func writeZipEntry(zw *zip.Writer, file *os.File, task fileTask, opts *Options, progressCb ProgressCallback) error {
+	header := &zip.FileHeader{
+		Name:   task.RelPath,
+		Method: zip.Deflate,
+	}
+	if opts.Level == 1 {
+		header.Method = zip.Store
+	}
+
+	w, err := zw.CreateHeader(header)
+	if err != nil {
+		return fmt.Errorf("%s: create header: %w", task.RelPath, err)
+	}
+
+	buf := getReadBuffer()
+	defer putReadBuffer(buf)
+
+	var written, lastReported int64
+	for {
+		nr, errRead := file.Read(buf)
+		if nr > 0 {
+			nw, errWrite := w.Write(buf[0:nr])
+			if errWrite != nil {
+				return fmt.Errorf("%s: write: %w", task.RelPath, errWrite)
+			}
+			written += int64(nw)
+			if progressCb != nil && written-lastReported >= progressReportStep {
+				lastReported = written
+				progressCb(ProgressEvent{
+					Type:     EventFileProgress,
+					FilePath: task.RelPath,
+					Current:  written,
+					Total:    int64(task.OrigSize),
+				})
+			}
+		}
+		if errRead == io.EOF {
+			return nil
+		}
+		if errRead != nil {
+			return fmt.Errorf("%s: read: %w", task.RelPath, errRead)
+		}
+	}
 }

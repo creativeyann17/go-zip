@@ -15,7 +15,7 @@ ZIP-only: no format flag. Single-thread writes `archive.zip`; multi-thread write
 - **True parallel ZIP** — one archive part per busy worker (no shared-writer mutex)
 - **Deflate levels 1–9** (level 1 = store)
 - **`.gitignore` support** (nested)
-- **`--no-gc`** pooled buffers for lower GC spikes
+- **`--no-gc`** lower GC latency spikes, capped to available RAM (never uncapped — see below)
 - **Multi-part aware** decompress and verify
 - **Zip-slip protection** on extract
 - **CLI and library** API
@@ -63,11 +63,21 @@ gozip decompress -i backup.zip -o /restore
 | `-t, --threads` | Worker count (default: CPU count) |
 | `-l, --level` | Deflate 1–9 (default 5) |
 | `--gitignore` | Honor `.gitignore` |
-| `--no-gc` | Disable GC during compress |
+| `--no-gc` | Lower GC latency during compress, capped to available RAM |
 | `--dry-run` | Simulate only |
 | `--verbose` / `--quiet` | Logging |
 
 No `--zip` flag: output is always ZIP.
+
+### `--no-gc`
+
+Turns off percentage-based GC for fewer pauses, but always pairs it with a soft
+memory limit (Go's `debug.SetMemoryLimit`) sized to ~70% of currently available
+RAM. The runtime still forces a GC pass before the process grows past that cap
+— it cannot grow unbounded, swap-thrash, or OOM the machine. If available RAM
+can't be read (non-Linux, or `/proc/meminfo` unreadable) or is too low for a
+meaningful cap, `--no-gc` is silently downgraded to default GC and a warning is
+printed (unless `--quiet`).
 
 ### Naming rules
 

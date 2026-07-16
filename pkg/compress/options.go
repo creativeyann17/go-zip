@@ -40,8 +40,12 @@ type Options struct {
 	// UseGitignore respects .gitignore files to exclude matching paths
 	UseGitignore bool
 
-	// DisableGC disables garbage collection during compression.
-	// Uses pooled buffers to minimize allocations. Default: false
+	// DisableGC turns off percentage-based GC for lower latency, backed by a
+	// soft memory limit (debug.SetMemoryLimit) sized from currently available
+	// RAM — the runtime still forces GC before the process exceeds that cap,
+	// so this cannot grow unbounded and swap-thrash or OOM the machine. If
+	// available RAM can't be determined or is too low for a meaningful cap,
+	// GC is left at its default instead of being disabled. Default: false
 	DisableGC bool
 }
 

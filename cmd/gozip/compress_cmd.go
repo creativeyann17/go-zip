@@ -68,7 +68,7 @@ func compressCmd() *cobra.Command {
 				log("  Gitignore:   enabled")
 			}
 			if disableGC {
-				log("  GC Mode:     disabled (pooled buffers)")
+				log("  GC Mode:     --no-gc requested (capped to available RAM, see warnings below if cancelled)")
 			}
 			log("")
 
@@ -103,7 +103,7 @@ func compressCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Show detailed output")
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "Minimal output")
 	cmd.Flags().BoolVar(&useGitignore, "gitignore", false, "Respect .gitignore files")
-	cmd.Flags().BoolVar(&disableGC, "no-gc", false, "Disable GC during compression (pooled buffers)")
+	cmd.Flags().BoolVar(&disableGC, "no-gc", false, "Lower GC latency during compression, capped to available RAM")
 	_ = cmd.MarkFlagRequired("input")
 
 	return cmd
