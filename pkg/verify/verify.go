@@ -81,6 +81,10 @@ func Verify(opts *Options, progressCb ProgressCallback) (*Result, error) {
 	result.MetadataValid = true
 	pathTracker := pathutil.NewPathTracker()
 
+	if progressCb != nil {
+		progressCb(ProgressEvent{Type: EventStart})
+	}
+
 	for _, zipPath := range zipPaths {
 		stat, err := os.Stat(zipPath)
 		if err != nil {
