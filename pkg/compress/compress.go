@@ -256,10 +256,9 @@ func compressToZip(opts *Options, progressCb ProgressCallback, foldersToCompress
 
 	if progressCb != nil {
 		progressCb(ProgressEvent{
-			Type:           EventComplete,
-			Current:        int64(result.FilesProcessed),
-			Total:          int64(totalFiles),
-			CompressedSize: result.CompressedSize,
+			Type:    EventComplete,
+			Current: int64(result.FilesProcessed),
+			Total:   int64(totalFiles),
 		})
 	}
 

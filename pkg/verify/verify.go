@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/creativeyann17/go-zip/internal/multipart"
-	"github.com/creativeyann17/go-zip/internal/pathutil"
 )
 
 // ProgressCallback is called for progress updates during verification.
@@ -79,7 +78,7 @@ func Verify(opts *Options, progressCb ProgressCallback) (*Result, error) {
 
 	result.HeaderValid = true
 	result.MetadataValid = true
-	pathTracker := pathutil.NewPathTracker()
+	seenPaths := make(map[string]bool)
 
 	if progressCb != nil {
 		progressCb(ProgressEvent{Type: EventStart})
@@ -93,7 +92,7 @@ func Verify(opts *Options, progressCb ProgressCallback) (*Result, error) {
 		}
 		result.ArchiveSize += uint64(stat.Size())
 
-		if err := verifyZipPart(zipPath, opts, progressCb, result, pathTracker); err != nil {
+		if err := verifyZipPart(zipPath, opts, progressCb, result, seenPaths); err != nil {
 			result.Errors = append(result.Errors, fmt.Errorf("verify %s: %w", zipPath, err))
 		}
 	}
@@ -113,7 +112,7 @@ func Verify(opts *Options, progressCb ProgressCallback) (*Result, error) {
 	return result, nil
 }
 
-func verifyZipPart(zipPath string, opts *Options, progressCb ProgressCallback, result *Result, pathTracker *pathutil.PathTracker) error {
+func verifyZipPart(zipPath string, opts *Options, progressCb ProgressCallback, result *Result, seenPaths map[string]bool) error {
 	zipReader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		result.HeaderValid = false
@@ -132,10 +131,11 @@ func verifyZipPart(zipPath string, opts *Options, progressCb ProgressCallback, r
 			CompressedSize: file.CompressedSize64,
 		}
 
-		if pathTracker.CheckDuplicate(file.Name) {
+		if seenPaths[file.Name] {
 			result.DuplicatePaths++
 			result.Errors = append(result.Errors, fmt.Errorf("duplicate path: %s", file.Name))
 		}
+		seenPaths[file.Name] = true
 
 		result.FileCount++
 		result.TotalOrigSize += file.UncompressedSize64

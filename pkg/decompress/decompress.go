@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/creativeyann17/go-zip/internal/multipart"
+	"github.com/creativeyann17/go-zip/internal/progress"
 	"github.com/klauspost/compress/flate"
 )
 
@@ -17,27 +18,18 @@ const progressReportStep = 1 << 20
 // ProgressCallback is called for various progress events.
 type ProgressCallback func(event ProgressEvent)
 
-// ProgressEvent contains progress information.
-type ProgressEvent struct {
-	Type             EventType
-	FilePath         string
-	Current          int64
-	Total            int64
-	CurrentBytes     uint64
-	TotalBytes       uint64
-	DecompressedSize uint64
-}
-
-// EventType indicates the type of progress event.
-type EventType int
+// ProgressEvent and EventType alias internal/progress's types, shared with the
+// bar renderer so no field-by-field conversion is needed between them.
+type ProgressEvent = progress.Event
+type EventType = progress.EventType
 
 const (
-	EventStart EventType = iota
-	EventFileStart
-	EventFileProgress
-	EventFileComplete
-	EventComplete
-	EventError
+	EventStart        = progress.EventStart
+	EventFileStart    = progress.EventFileStart
+	EventFileProgress = progress.EventFileProgress
+	EventFileComplete = progress.EventFileComplete
+	EventComplete     = progress.EventComplete
+	EventError        = progress.EventError
 )
 
 // Decompress extracts a ZIP archive (single or multi-part) to OutputPath.

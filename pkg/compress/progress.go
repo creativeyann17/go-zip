@@ -7,18 +7,7 @@ import (
 
 // ProgressBarCallback creates multi-progress bars for compression.
 func ProgressBarCallback() (ProgressCallback, *mpb.Progress) {
-	genericCb, p := progress.ProgressBarCallback()
-	callback := func(event ProgressEvent) {
-		genericCb(progress.Event{
-			Type:         progress.EventType(event.Type),
-			FilePath:     event.FilePath,
-			Current:      event.Current,
-			Total:        event.Total,
-			CurrentBytes: event.CurrentBytes,
-			TotalBytes:   event.TotalBytes,
-		})
-	}
-	return callback, p
+	return progress.ProgressBarCallback()
 }
 
 // FormatSummary formats a compression result.

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/creativeyann17/go-zip/internal/progress"
 )
 
 type fileTask struct {
@@ -21,27 +23,18 @@ type folderTask struct {
 // ProgressCallback is called for various progress events.
 type ProgressCallback func(event ProgressEvent)
 
-// ProgressEvent contains progress information.
-type ProgressEvent struct {
-	Type           EventType
-	FilePath       string
-	Current        int64
-	Total          int64
-	CurrentBytes   uint64
-	TotalBytes     uint64
-	CompressedSize uint64
-}
-
-// EventType indicates the type of progress event.
-type EventType int
+// ProgressEvent and EventType alias internal/progress's types, shared with the
+// bar renderer so no field-by-field conversion is needed between them.
+type ProgressEvent = progress.Event
+type EventType = progress.EventType
 
 const (
-	EventStart EventType = iota
-	EventFileStart
-	EventFileProgress
-	EventFileComplete
-	EventComplete
-	EventError
+	EventStart        = progress.EventStart
+	EventFileStart    = progress.EventFileStart
+	EventFileProgress = progress.EventFileProgress
+	EventFileComplete = progress.EventFileComplete
+	EventComplete     = progress.EventComplete
+	EventError        = progress.EventError
 )
 
 func collectFiles(opts *Options, result *Result) ([]folderTask, int, uint64, error) {

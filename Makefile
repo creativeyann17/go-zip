@@ -1,4 +1,4 @@
-.PHONY: all build build-all clean test fmt lint run tidy dev install
+.PHONY: all build build-all clean test check fmt run tidy dev install install-hooks
 
 BINARY_NAME=gozip
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -41,11 +41,21 @@ clean:
 test: install
 	go test ./... -count=1
 
+# vet + race-detector tests: closest vanilla-Go gets to Rust's compile-time safety.
+check:
+	@fmtout=$$(gofmt -l .); if [ -n "$$fmtout" ]; then echo "✗ needs gofmt:"; echo "$$fmtout"; exit 1; fi
+	go vet ./...
+	go test -race ./... -count=1
+
 fmt:
 	gofmt -w .
 
 run: build
-	./bin/$(BINARY_NAME) version
+	./bin/$(BINARY_NAME) --version
 
 dev: install
-	go run ./cmd/gozip version
+	go run ./cmd/gozip --version
+
+install-hooks:
+	cp hooks/pre-commit .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
