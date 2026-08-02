@@ -1,12 +1,13 @@
 #!/bin/sh
-# Format + vet + race tests before every commit — install with `make install-hooks`.
+# Format + vet + tests (no race) before every commit — the full
+# race-detector check runs in CI, not here. Install with `make install-hooks`.
 make fmt
 git add -u
 
-echo "Running go vet + race tests..."
-if ! make check; then
+echo "Running go vet + tests..."
+if ! (go vet ./... && go test ./... -count=1); then
     echo ""
-    echo "✗ Check failed. Fix issues above before committing."
+    echo "✗ Checks failed. Fix issues above before committing."
     exit 1
 fi
 

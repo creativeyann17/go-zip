@@ -22,8 +22,8 @@ jobs:
         with:
           go-version: '1.26'
 
-      - name: Run tests
-        run: make test
+      - name: Check (fmt + vet + race)
+        run: make check
 
   release:
     name: Build and release
